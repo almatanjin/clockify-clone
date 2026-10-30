@@ -45,3 +45,4 @@ next-env.d.ts
 MANUAL_TESTING_GUIDE.md
 VERCEL_DEPLOYMENT_GUIDE.md
 
+.neon
