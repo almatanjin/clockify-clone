@@ -1,0 +1,256 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Enums
+// -----------------------------------------------------------------------------
+
+enum WorkspaceRole {
+  ADMIN
+  MANAGER
+  MEMBER
+}
+
+enum WeekStart {
+  MONDAY
+  SUNDAY
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+}
+
+enum TaskStatus {
+  ACTIVE
+  DONE
+}
+
+// -----------------------------------------------------------------------------
+// Core Identity & Multi-Tenant Workspace Models
+// -----------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  timezone     String   @default("UTC") // IANA format, e.g., "Asia/Dhaka", "America/New_York"
+  createdAt    DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  ownedWorkspaces      Workspace[]       @relation("WorkspaceOwner")
+  workspaceMemberships WorkspaceMember[]
+  projectMemberships   ProjectMember[]
+  timeEntries          TimeEntry[]
+
+  @@index([email])
+}
+
+model Workspace {
+  id                String    @id @default(cuid())
+  name              String
+  ownerId           String
+  currency          String    @default("USD")
+  defaultHourlyRate Int       @default(0) // Stored in integer cents (e.g., 5000 = $50.00/hr)
+  weekStart         WeekStart @default(MONDAY)
+  createdAt         DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt         DateTime  @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  owner       User              @relation("WorkspaceOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  members     WorkspaceMember[]
+  invitations Invitation[]
+  clients     Client[]
+  projects    Project[]
+  tags        Tag[]
+  timeEntries TimeEntry[]
+
+  @@index([ownerId])
+}
+
+model WorkspaceMember {
+  id          String        @id @default(cuid())
+  userId      String
+  workspaceId String
+  role        WorkspaceRole @default(MEMBER)
+  hourlyRate  Int?          // Optional member-specific override in integer cents
+  joinedAt    DateTime      @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime      @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId, role])
+}
+
+model Invitation {
+  id          String           @id @default(cuid())
+  email       String
+  workspaceId String
+  role        WorkspaceRole    @default(MEMBER)
+  hourlyRate  Int?             // Optional pre-configured rate in integer cents
+  token       String           @unique
+  status      InvitationStatus @default(PENDING)
+  expiresAt   DateTime         @db.Timestamptz(3)
+  createdAt   DateTime         @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime         @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, status])
+  @@index([email, status])
+}
+
+// -----------------------------------------------------------------------------
+// Projects, Clients, Tasks, and Tags Hierarchy
+// -----------------------------------------------------------------------------
+
+model Client {
+  id          String   @id @default(cuid())
+  name        String
+  workspaceId String
+  isArchived  Boolean  @default(false)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  projects  Project[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, isArchived])
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  name        String
+  color       String   @default("#06B6D4") // Hex color code (e.g., Clockify cyan/teal)
+  clientId    String?
+  workspaceId String
+  isBillable  Boolean  @default(true)
+  hourlyRate  Int?     // Optional project-specific rate override in integer cents
+  isPublic    Boolean  @default(true)
+  isArchived  Boolean  @default(false)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  client      Client?         @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  members     ProjectMember[]
+  tasks       Task[]
+  timeEntries TimeEntry[]
+
+  @@unique([workspaceId, clientId, name])
+  @@index([workspaceId, isArchived, isPublic])
+  @@index([clientId])
+}
+
+model ProjectMember {
+  id         String   @id @default(cuid())
+  projectId  String
+  userId     String
+  hourlyRate Int?     // Optional project-member specific rate override in integer cents
+  assignedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  // Relations
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([userId])
+}
+
+model Task {
+  id         String     @id @default(cuid())
+  name       String
+  projectId  String
+  status     TaskStatus @default(ACTIVE)
+  isArchived Boolean    @default(false)
+  createdAt  DateTime   @default(now()) @db.Timestamptz(3)
+  updatedAt  DateTime   @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  timeEntries TimeEntry[]
+
+  @@unique([projectId, name])
+  @@index([projectId, status, isArchived])
+}
+
+model Tag {
+  id          String   @id @default(cuid())
+  name        String
+  workspaceId String
+  isArchived  Boolean  @default(false)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  workspace   Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  timeEntries TimeEntryTag[]
+
+  @@unique([workspaceId, name])
+  @@index([workspaceId, isArchived])
+}
+
+// -----------------------------------------------------------------------------
+// Time Tracking Engine
+// -----------------------------------------------------------------------------
+
+model TimeEntry {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  projectId   String?
+  taskId      String?
+  description String    @default("")
+  startTime   DateTime  @db.Timestamptz(3)
+  endTime     DateTime? @db.Timestamptz(3) // NULL indicates an actively running timer
+  duration    Int?      // Stored in integer seconds; NULL while timer is actively running
+  isBillable  Boolean   @default(false)
+  hourlyRate  Int       @default(0) // Snapshotted rate in integer cents at entry creation/update
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  // Relations
+  workspace Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  project   Project?       @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  task      Task?          @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  tags      TimeEntryTag[]
+
+  // Composite indexes for fast timesheet & analytics queries
+  @@index([workspaceId, userId, startTime(sort: Desc)])
+  @@index([workspaceId, startTime, endTime])
+  @@index([workspaceId, projectId, isBillable])
+  @@index([userId, endTime])
+}
+
+model TimeEntryTag {
+  timeEntryId String
+  tagId       String
+  assignedAt  DateTime @default(now()) @db.Timestamptz(3)
+
+  // Relations
+  timeEntry TimeEntry @relation(fields: [timeEntryId], references: [id], onDelete: Cascade)
+  tag       Tag       @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([timeEntryId, tagId])
+  @@index([tagId])
+}
