@@ -22,8 +22,6 @@ You can deploy this application completely free of charge using:
 - **Neon** (Free serverless PostgreSQL with connection pooling)
 - **Upstash** (Free serverless Redis for real-time timers — optional, automatic fallback to PostgreSQL)
 
-👉 **Read the comprehensive step-by-step guide here: [VERCEL_DEPLOYMENT_GUIDE.md](./VERCEL_DEPLOYMENT_GUIDE.md)**
-
 ---
 
 ## 💻 Local Development Setup
